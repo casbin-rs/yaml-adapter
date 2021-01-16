@@ -1,0 +1,25 @@
+[package]
+name = "yaml-adapter"
+version = "0.1.0"
+authors = ["closetool <c299999999@qq.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+yaml-rust = "0.4.5"
+async-trait = "0.1.40"
+casbin = { version = "2.0.2" }
+linked-hash-map = "0.5"
+tokio = { version = "0.3.1", default-features = false, optional = true }
+async-std = { version = "1.6.4", default-features = false, optional = true }
+
+[dev-dependencies]
+async-std = { version = "1.6.4", features = [ "attributes" ] }
+tokio = { version = "0.3.1", features = [ "full" ] }
+
+[features]
+default = ["runtime-async-std"]
+
+runtime-async-std = ["async-std"]
+runtime-tokio     = ["tokio/fs", "tokio/io-util"]
