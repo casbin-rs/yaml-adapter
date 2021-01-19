@@ -1,8 +1,6 @@
-use crate::ParsePolicyFailed;
+use crate::{models::Policies, ParsePolicyFailed};
 use async_trait::async_trait;
-use casbin::{error::AdapterError, error::ModelError, Adapter, Error, Filter, Model, Result};
-use linked_hash_map::LinkedHashMap;
-use yaml_rust::{Yaml, YamlEmitter, YamlLoader};
+use casbin::{error::AdapterError, Adapter, Error, Filter, Model, Result};
 
 #[cfg(feature = "runtime-async-std")]
 use async_std::{
@@ -57,55 +55,69 @@ where
             );
         }
 
-        let mut policies = LinkedHashMap::<_, _>::new();
-        let ast_map = m
-            .get_model()
-            .get("p")
-            .ok_or_else(|| ModelError::P("Missing policy definition in conf file".to_owned()))?;
-
-        for (ptype, ast) in ast_map {
-            policies.insert(
-                Yaml::from_str(ptype),
-                Yaml::Array(
-                    ast.get_policy()
+        let mut policies = Policies::new();
+        for sec in vec!["p", "g"] {
+            if let Some(ast_map) = m.get_model().get(sec) {
+                for (ptype, ast) in ast_map {
+                    let ps = ast
+                        .get_policy()
                         .iter()
-                        .map(|p| {
-                            Yaml::Array(p.iter().map(|s| Yaml::from_str(s)).collect::<Vec<Yaml>>())
-                        })
-                        .collect::<Vec<Yaml>>(),
-                ),
-            );
+                        .map(|v| v.iter().map(|s| s.clone()).collect())
+                        .collect();
+                    policies.0.insert(ptype.to_string(), ps);
+                }
+            }
         }
 
-        let mut buf = String::new();
-        let mut emitter = YamlEmitter::new(&mut buf);
-        if let Err(err) = emitter.dump(&Yaml::Hash(policies)) {
-            return Err(Error::AdapterError(AdapterError(Box::new(err))));
-        }
-        std::mem::drop(emitter);
-
-        //FIXME
-        //self.save_policy_file(buf).await?;
-        return Ok(());
+        self.save_policy_to_file(&policies).await?;
+        Ok(())
     }
 
     async fn clear_policy(&mut self) -> Result<()> {
-        self.save_policy_file(String::new()).await?;
+        self.save_policy_to_file(&Policies::new()).await?;
         Ok(())
     }
 
     async fn add_policies(
         &mut self,
         _sec: &str,
-        _ptype: &str,
-        _rules: Vec<Vec<String>>,
+        ptype: &str,
+        rules: Vec<Vec<String>>,
     ) -> Result<bool> {
-        // this api shouldn't implement, just for convenience
+        let mut yaml = self.load_yaml().await?;
+        match yaml.0.get_mut(ptype) {
+            Some(v) => {
+                for rule in &rules {
+                    if v.contains(rule) {
+                        return Ok(false);
+                    }
+                }
+                v.extend(rules);
+            }
+            None => {
+                yaml.0.insert(ptype.to_string(), rules);
+            }
+        }
+        self.save_policy_to_file(&yaml).await?;
         Ok(true)
     }
 
-    async fn add_policy(&mut self, _sec: &str, _ptype: &str, _rule: Vec<String>) -> Result<bool> {
-        // this api shouldn't implement, just for convenience
+    async fn add_policy(&mut self, _sec: &str, ptype: &str, rule: Vec<String>) -> Result<bool> {
+        let mut yaml = self.load_yaml().await?;
+        match yaml.0.get_mut(ptype) {
+            Some(v) => {
+                if !v.contains(&rule) {
+                    v.push(rule);
+                } else {
+                    return Ok(false);
+                }
+            }
+            None => {
+                yaml.0.insert(ptype.to_string(), vec![rule]);
+            }
+        }
+
+        self.save_policy_to_file(&yaml).await?;
         Ok(true)
     }
 
@@ -116,32 +128,85 @@ where
     async fn remove_filtered_policy(
         &mut self,
         _sec: &str,
-        _ptype: &str,
-        _field_index: usize,
-        _field_values: Vec<String>,
+        ptype: &str,
+        field_index: usize,
+        field_values: Vec<String>,
     ) -> Result<bool> {
-        // this api shouldn't implement, just for convenience
+        if field_values.is_empty() {
+            return Ok(false);
+        }
+        let mut yaml = self.load_yaml().await?;
+        let mut temp = Vec::new();
+        match yaml.0.remove(ptype) {
+            Some(v) => {
+                for rule in v {
+                    for (i, field_value) in field_values.iter().enumerate() {
+                        if field_index + i >= rule.len() {
+                            return Ok(false);
+                        }
+                        if !field_value.is_empty() && &rule[field_index + i] != field_value {
+                            temp.push(rule.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+            None => {}
+        }
+        yaml.0.insert(ptype.to_string(), temp);
+        self.save_policy_to_file(&yaml).await?;
         Ok(true)
     }
 
     async fn remove_policies(
         &mut self,
         _sec: &str,
-        _ptype: &str,
-        _rules: Vec<Vec<String>>,
+        ptype: &str,
+        rules: Vec<Vec<String>>,
     ) -> Result<bool> {
-        // this api shouldn't implement, just for convenience
+        let mut yaml = self.load_yaml().await?;
+        match yaml.0.remove(ptype) {
+            Some(mut v) => {
+                for rule in &rules {
+                    if !v.contains(rule) {
+                        return Ok(false);
+                    }
+                }
+                for rule in &rules {
+                    v = v.into_iter().filter(|r| r != rule).collect();
+                }
+                yaml.0.insert(ptype.to_string(), v);
+            }
+            None => {
+                return Ok(true);
+            }
+        }
+        self.save_policy_to_file(&yaml).await?;
         Ok(true)
     }
 
-    async fn remove_policy(
-        &mut self,
-        _sec: &str,
-        _ptype: &str,
-        _rule: Vec<String>,
-    ) -> Result<bool> {
-        // this api shouldn't implement, just for convenience
-        Ok(true)
+    async fn remove_policy(&mut self, _sec: &str, ptype: &str, rule: Vec<String>) -> Result<bool> {
+        let mut yaml = self.load_yaml().await?;
+        let mut removed = false;
+        match yaml.0.remove(ptype) {
+            Some(v) => {
+                let v = v
+                    .into_iter()
+                    .filter(|v| {
+                        if v == &rule {
+                            removed = true;
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                    .collect::<Vec<Vec<String>>>();
+                yaml.0.insert(ptype.to_string(), v);
+            }
+            None => return Ok(false),
+        }
+        self.save_policy_to_file(&yaml).await?;
+        Ok(removed)
     }
 }
 
@@ -156,25 +221,28 @@ where
         }
     }
 
-    async fn save_policy_file(&self, text: String) -> Result<()> {
+    async fn save_policy_to_file(&self, p: &Policies) -> Result<()> {
+        let buf = match serde_yaml::to_vec(p) {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(Error::AdapterError(AdapterError(Box::new(e))));
+            }
+        };
+
         let mut file = File::create(&self.file_path).await?;
-        file.write_all(text.as_bytes()).await?;
+        file.write_all(&buf).await?;
         Ok(())
     }
 
-    async fn load_yaml(&self) -> Result<Yaml> {
+    async fn load_yaml(&self) -> Result<Policies> {
         let mut fd = File::open(&self.file_path).await?;
         let mut buf = String::new();
-        let _ = fd.read_to_string(&mut buf).await;
-
-        let docs = match YamlLoader::load_from_str(buf.as_ref()) {
-            Ok(yaml) => yaml,
-            Err(err) => return Err(Error::AdapterError(AdapterError(Box::new(err)))),
+        fd.read_to_string(&mut buf).await?;
+        let policies: Policies = match serde_yaml::from_str(&buf) {
+            Ok(p) => p,
+            Err(e) => return Err(Error::AdapterError(AdapterError(Box::new(e)))),
         };
-        Ok(docs
-            .into_iter()
-            .next()
-            .ok_or(ParsePolicyFailed("there should be a doc".to_string()))?)
+        Ok(policies)
     }
 
     async fn load_filtered_policy_into_model<'a>(
@@ -182,45 +250,24 @@ where
         m: &mut dyn Model,
         f: Filter<'a>,
     ) -> Result<bool> {
-        let doc = self.load_yaml().await?;
+        let yaml = self.load_yaml().await?;
+        println!("{:?}", yaml);
         let mut filtered = false;
-        for (ptype, polices) in doc
-            .into_hash()
-            .ok_or(AdapterError(Box::new(ParsePolicyFailed(
-                "top level should be map".to_string(),
-            ))))?
-        {
-            let ptype = ptype
-                .into_string()
-                .ok_or(AdapterError(Box::new(ParsePolicyFailed(
-                    "ptype should be string".to_string(),
-                ))))?;
-            let polices = polices
-                .into_vec()
-                .ok_or(AdapterError(Box::new(ParsePolicyFailed(
-                    "policy should be array".to_string(),
-                ))))?;
+        for (ptype, polices) in yaml.0 {
             let sec = ptype
                 .chars()
                 .next()
                 .map(|x| x.to_string())
                 .ok_or(ParsePolicyFailed("ptype should be string".to_string()))?;
-            let f = if sec.eq_ignore_ascii_case("p") {
-                f.p.clone()
-            } else {
-                f.g.clone()
-            };
-            if f.contains(&ptype.as_ref()) {
-                filtered = true;
-                continue;
-            }
-            for policy in polices {
-                let policy = policy
-                    .into_vec()
-                    .ok_or(ParsePolicyFailed("policy should be array".to_string()))?
-                    .into_iter()
-                    .map(|s| s.into_string().unwrap())
-                    .collect();
+
+            let f = if sec == "p" { &f.p } else { &f.g };
+            'outer: for policy in polices {
+                for (i, rule) in f.iter().enumerate() {
+                    if !rule.is_empty() && rule != &policy[i] {
+                        filtered = true;
+                        continue 'outer;
+                    }
+                }
                 m.add_policy(&sec, &ptype, policy);
             }
         }

@@ -7,10 +7,10 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-yaml-rust = "0.4.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.8"
 async-trait = "0.1.40"
-casbin = { version = "2.0.2" }
-linked-hash-map = "0.5"
+casbin = {  version = "2.0" }
 tokio = { version = "0.3.1", default-features = false, optional = true }
 async-std = { version = "1.6.4", default-features = false, optional = true }
 
@@ -21,5 +21,5 @@ tokio = { version = "0.3.1", features = [ "full" ] }
 [features]
 default = ["runtime-async-std"]
 
-runtime-async-std = ["async-std"]
-runtime-tokio     = ["tokio/fs", "tokio/io-util"]
+runtime-async-std = ["casbin/runtime-async-std","async-std"]
+runtime-tokio     = ["casbin/runtime-tokio", "tokio/fs", "tokio/io-util"]

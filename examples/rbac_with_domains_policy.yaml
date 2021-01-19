@@ -1,0 +1,8 @@
+p:
+    - [admin,domain1,data1,read]
+    - [admin,domain1,data1,write]
+    - [admin,domain2,data2,read]
+    - [admin,domain2,data2,write]
+g:
+    - [alice,admin,domain1]
+    - [bob,admin,domain2]

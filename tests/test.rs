@@ -1,134 +1,209 @@
-use casbin::{prelude::*, DefaultModel, Enforcer, Model};
+use casbin::Adapter;
 use yaml_adapter::YamlAdapter;
 
-#[cfg(not(target_arch = "wasm32"))]
-#[cfg_attr(
-    all(feature = "runtime-async-std", not(target_arch = "wasm32")),
-    async_std::test
-)]
-#[cfg_attr(
-    all(feature = "runtime-tokio", not(target_arch = "wasm32")),
-    tokio::test
-)]
-async fn test_key_match_model_in_memory() {
-    let mut m = DefaultModel::default();
-    m.add_def("r", "r", "sub, obj, act");
-    m.add_def("p", "p", "sub, obj, act");
-    m.add_def("e", "e", "some(where (p.eft == allow))");
-    m.add_def(
-        "m",
-        "m",
-        "r.sub == p.sub && keyMatch(r.obj, p.obj) && regexMatch(r.act, p.act)",
-    );
-
-    let adapter = YamlAdapter::new("examples/keymatch_policy.yaml");
-    let e = Enforcer::new(m, adapter).await.unwrap();
-    assert_eq!(
-        true,
-        e.enforce(("alice", "/alice_data/resource1", "GET"))
-            .unwrap()
-    );
-    assert_eq!(
-        true,
-        e.enforce(("alice", "/alice_data/resource1", "POST"))
-            .unwrap()
-    );
-    assert_eq!(
-        true,
-        e.enforce(("alice", "/alice_data/resource2", "GET"))
-            .unwrap()
-    );
-    assert_eq!(
-        false,
-        e.enforce(("alice", "/alice_data/resource2", "POST"))
-            .unwrap()
-    );
-    assert_eq!(
-        false,
-        e.enforce(("alice", "/bob_data/resource1", "GET")).unwrap()
-    );
-    assert_eq!(
-        false,
-        e.enforce(("alice", "/bob_data/resource1", "POST")).unwrap()
-    );
-    assert_eq!(
-        false,
-        e.enforce(("alice", "/bob_data/resource2", "GET")).unwrap()
-    );
-    assert_eq!(
-        false,
-        e.enforce(("alice", "/bob_data/resource2", "POST")).unwrap()
-    );
-
-    assert_eq!(
-        false,
-        e.enforce(("bob", "/alice_data/resource1", "GET")).unwrap()
-    );
-    assert_eq!(
-        false,
-        e.enforce(("bob", "/alice_data/resource1", "POST")).unwrap()
-    );
-    assert_eq!(
-        true,
-        e.enforce(("bob", "/alice_data/resource2", "GET")).unwrap()
-    );
-    assert_eq!(
-        false,
-        e.enforce(("bob", "/alice_data/resource2", "POST")).unwrap()
-    );
-    assert_eq!(
-        false,
-        e.enforce(("bob", "/bob_data/resource1", "GET")).unwrap()
-    );
-    assert_eq!(
-        true,
-        e.enforce(("bob", "/bob_data/resource1", "POST")).unwrap()
-    );
-    assert_eq!(
-        false,
-        e.enforce(("bob", "/bob_data/resource2", "GET")).unwrap()
-    );
-    assert_eq!(
-        true,
-        e.enforce(("bob", "/bob_data/resource2", "POST")).unwrap()
-    );
-
-    assert_eq!(true, e.enforce(("cathy", "/cathy_data", "GET")).unwrap());
-    assert_eq!(true, e.enforce(("cathy", "/cathy_data", "POST")).unwrap());
-    assert_eq!(
-        false,
-        e.enforce(("cathy", "/cathy_data", "DELETE")).unwrap()
-    );
+fn to_owned(v: Vec<&str>) -> Vec<String> {
+    v.into_iter().map(|x| x.to_owned()).collect()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-#[cfg_attr(
-    all(feature = "runtime-async-std", not(target_arch = "wasm32")),
-    async_std::test
-)]
-#[cfg_attr(
-    all(feature = "runtime-tokio", not(target_arch = "wasm32")),
-    tokio::test
-)]
-async fn test_implicit_permission_api_with_domain() {
-    let m = DefaultModel::from_file("examples/rbac_with_domains_model.conf")
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn test_create() {
+    use casbin::prelude::*;
+
+    let m = DefaultModel::from_file("examples/rbac_model.conf")
         .await
         .unwrap();
 
-    let adapter = FileAdapter::new("examples/rbac_with_hierarchy_with_domains_policy.csv");
-    let mut e = Enforcer::new(m, adapter).await.unwrap();
-
-    assert_eq!(
-        vec![
-            vec!["alice", "domain1", "data2", "read"],
-            vec!["role:reader", "domain1", "data1", "read"],
-            vec!["role:writer", "domain1", "data1", "write"],
-        ],
-        sort_unstable(e.get_implicit_permissions_for_user("alice", Some("domain1")))
-    );
+    let adapter = YamlAdapter::new("examples/rbac_policy.yaml");
+    assert!(Enforcer::new(m, adapter).await.is_ok());
 }
 
-fn sort_unstable<T: Ord>(mut v: Vec<T>) -> Vec<T> {
-    v.sort_unstable();
-    v
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn test_adapter() {
+    use casbin::prelude::*;
+
+    let file_adapter = FileAdapter::new("examples/rbac_policy.csv");
+
+    let m = DefaultModel::from_file("examples/rbac_model.conf")
+        .await
+        .unwrap();
+
+    let mut e = Enforcer::new(m, file_adapter).await.unwrap();
+    let mut adapter = YamlAdapter::new("examples/rbac_policy.yaml");
+
+    assert!(adapter.save_policy(e.get_mut_model()).await.is_ok());
+
+    assert!(adapter
+        .remove_policy("", "p", to_owned(vec!["alice", "data1", "read"]))
+        .await
+        .is_ok());
+    assert!(adapter
+        .remove_policy("", "p", to_owned(vec!["bob", "data2", "write"]))
+        .await
+        .is_ok());
+    assert!(adapter
+        .remove_policy("", "p", to_owned(vec!["data2_admin", "data2", "read"]))
+        .await
+        .is_ok());
+    assert!(adapter
+        .remove_policy("", "p", to_owned(vec!["data2_admin", "data2", "write"]))
+        .await
+        .is_ok());
+    assert!(adapter
+        .remove_policy("", "g", to_owned(vec!["alice", "data2_admin"]))
+        .await
+        .is_ok());
+
+    println!(
+        "{:?}",
+        adapter
+            .add_policy("", "p", to_owned(vec!["alice", "data1", "read"]))
+            .await
+    );
+    assert!(adapter
+        .add_policy("", "p", to_owned(vec!["alice", "data1", "read"]))
+        .await
+        .is_ok());
+    assert!(adapter
+        .add_policy("", "p", to_owned(vec!["bob", "data2", "write"]))
+        .await
+        .is_ok());
+    assert!(adapter
+        .add_policy("", "p", to_owned(vec!["data2_admin", "data2", "read"]))
+        .await
+        .is_ok());
+    assert!(adapter
+        .add_policy("", "p", to_owned(vec!["data2_admin", "data2", "write"]))
+        .await
+        .is_ok());
+
+    assert!(adapter
+        .remove_policies(
+            "",
+            "p",
+            vec![
+                to_owned(vec!["alice", "data1", "read"]),
+                to_owned(vec!["bob", "data2", "write"]),
+                to_owned(vec!["data2_admin", "data2", "read"]),
+                to_owned(vec!["data2_admin", "data2", "write"]),
+            ]
+        )
+        .await
+        .is_ok());
+
+    assert!(adapter
+        .add_policies(
+            "",
+            "p",
+            vec![
+                to_owned(vec!["alice", "data1", "read"]),
+                to_owned(vec!["bob", "data2", "write"]),
+                to_owned(vec!["data2_admin", "data2", "read"]),
+                to_owned(vec!["data2_admin", "data2", "write"]),
+            ]
+        )
+        .await
+        .is_ok());
+
+    assert!(adapter
+        .add_policy("", "g", to_owned(vec!["alice", "data2_admin"]))
+        .await
+        .is_ok());
+
+    assert!(adapter
+        .remove_policy("", "p", to_owned(vec!["alice", "data1", "read"]))
+        .await
+        .is_ok());
+    assert!(adapter
+        .remove_policy("", "p", to_owned(vec!["bob", "data2", "write"]))
+        .await
+        .is_ok());
+    assert!(adapter
+        .remove_policy("", "p", to_owned(vec!["data2_admin", "data2", "read"]))
+        .await
+        .is_ok());
+    assert!(adapter
+        .remove_policy("", "p", to_owned(vec!["data2_admin", "data2", "write"]))
+        .await
+        .is_ok());
+    assert!(adapter
+        .remove_policy("", "g", to_owned(vec!["alice", "data2_admin"]))
+        .await
+        .is_ok());
+
+    assert!(!adapter
+        .remove_policy(
+            "",
+            "g",
+            to_owned(vec!["alice", "data2_admin", "not_exists"])
+        )
+        .await
+        .unwrap());
+
+    assert!(adapter
+        .add_policy("", "g", to_owned(vec!["alice", "data2_admin"]))
+        .await
+        .is_ok());
+    assert!(!adapter
+        .add_policy("", "g", to_owned(vec!["alice", "data2_admin"]))
+        .await
+        .unwrap());
+
+    assert!(!adapter
+        .remove_filtered_policy(
+            "",
+            "g",
+            0,
+            to_owned(vec!["alice", "data2_admin", "not_exists"]),
+        )
+        .await
+        .unwrap());
+
+    assert!(adapter
+        .remove_filtered_policy("", "g", 0, to_owned(vec!["alice", "data2_admin"]))
+        .await
+        .is_ok());
+
+    assert!(adapter
+        .add_policy(
+            "",
+            "g",
+            to_owned(vec!["alice", "data2_admin", "domain1", "domain2"]),
+        )
+        .await
+        .is_ok());
+    assert!(adapter
+        .remove_filtered_policy(
+            "",
+            "g",
+            1,
+            to_owned(vec!["data2_admin", "domain1", "domain2"]),
+        )
+        .await
+        .unwrap());
+
+    // shadow the previous enforcer
+    let mut e = Enforcer::new(
+        "examples/rbac_with_domains_model.conf",
+        "examples/rbac_with_domains_policy.csv",
+    )
+    .await
+    .unwrap();
+
+    assert!(adapter.save_policy(e.get_mut_model()).await.is_ok());
+    e.set_adapter(adapter).await.unwrap();
+
+    let filter = Filter {
+        p: vec!["", "domain1"],
+        g: vec!["", "", "domain1"],
+    };
+
+    e.load_filtered_policy(filter).await.unwrap();
+    assert!(e.enforce(("alice", "domain1", "data1", "read")).unwrap());
+    assert!(e.enforce(("alice", "domain1", "data1", "write")).unwrap());
+    assert!(!e.enforce(("alice", "domain1", "data2", "read")).unwrap());
+    assert!(!e.enforce(("alice", "domain1", "data2", "write")).unwrap());
+    assert!(!e.enforce(("bob", "domain2", "data2", "read")).unwrap());
+    assert!(!e.enforce(("bob", "domain2", "data2", "write")).unwrap());
 }
