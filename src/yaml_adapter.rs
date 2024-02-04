@@ -59,11 +59,7 @@ where
         for sec in ["p", "g"] {
             if let Some(ast_map) = m.get_model().get(sec) {
                 for (ptype, ast) in ast_map {
-                    let ps = ast
-                        .get_policy()
-                        .iter()
-                        .map(|v| v.to_vec())
-                        .collect();
+                    let ps = ast.get_policy().iter().map(|v| v.to_vec()).collect();
                     policies.0.insert(ptype.to_string(), ps);
                 }
             }
