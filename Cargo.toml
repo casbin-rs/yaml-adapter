@@ -1,6 +1,6 @@
 [package]
 name = "yaml-adapter"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["closetool <4closetool3@gmail.com>"]
 edition = "2018"
 description = "a adapter which reads yaml format policy file for casbin repo"

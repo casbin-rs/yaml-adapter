@@ -12,14 +12,14 @@ Yaml Adapter is a [yaml](https://github.com/dtolnay/serde-yaml) adapter for [Cas
 Add following to `Cargo.toml`
 
 ```
-yaml-adapter = { version = "0.1.0", features = "runtime-async-std" }
+yaml-adapter = { version = "1.0.0", features = "runtime-async-std" }
 async-std = "1.5.0"
 ```
 
 for using `tokio`
 
 ```
-yaml-adapter = { version = "0.1.0", features = "runtime-tokio" }
+yaml-adapter = { version = "1.0.0", features = "runtime-tokio" }
 tokio = "0.3.1"
 ```
 
