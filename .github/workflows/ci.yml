@@ -13,13 +13,14 @@ jobs:
     name: Auto Build CI
     runs-on: ${{ matrix.os }}
     strategy:
-        matrix:
-            os: [ubuntu-latest, windows-latest, macOS-latest]
-            rust: [nightly, beta, stable]
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+        rust: [nightly, beta, stable]
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@master
+        uses: actions/checkout@v3
 
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
@@ -29,31 +30,43 @@ jobs:
           components: rustfmt, clippy
           override: true
 
+      - name: Cache Cargo Home
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
       - name: Cargo Build
         uses: actions-rs/cargo@v1
         with:
           command: build
+          args: --verbose
 
       - name: Cargo Test For tokio
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --no-default-features --features runtime-tokio rt
+          args: --verbose --no-default-features --features runtime-tokio
 
       - name: Cargo Test For async-std
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --no-default-features --features runtime-async-std
+          args: --verbose --no-default-features --features runtime-async-std
 
       - name: Cargo Clippy
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: -- -D warnings
+          args: --verbose --all-features -- -D warnings
 
       - name: Cargo Fmt Check
         uses: actions-rs/cargo@v1
         with:
           command: fmt
-          args: --all -- --check
+          args: --verbose --all -- --check
