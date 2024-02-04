@@ -1,8 +1,10 @@
-name: CI
+name: Auto Build
 
 on:
-  pull_request:
   push:
+    branches:
+      - master
+  pull_request:
     branches:
       - master
 
@@ -11,68 +13,40 @@ jobs:
     name: Auto Build CI
     runs-on: ${{ matrix.os }}
     strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
-        rust: [beta, stable]
+        matrix:
+            os: [ubuntu-latest, windows-latest, macOS-latest]
+            rust: [nightly, beta, stable]
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@master
 
-      - name: Install Rust toolchain ${{ matrix.rust }}
+      - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain:  ${{ matrix.rust }}
+          toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
           override: true
 
-      - name: Install wasm32-unknown-unknown for ${{ matrix.rust }}
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain:  ${{ matrix.rust }}
-          target: wasm32-unknown-unknown
-          override: true
-     
-      # Work around https://github.com/actions/cache/issues/403 by using GNU tar
-      # instead of BSD tar.
-      - name: Install GNU tar
-        if: matrix.os == 'macOS-latest'
-        run: |
-          brew install gnu-tar
-          echo PATH="/usr/local/opt/gnu-tar/libexec/gnubin:$PATH" >> $GITHUB_ENV
-
-      - name: Release build async-std
+      - name: Cargo Build
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --release --no-default-features --features runtime-async-std,cached,glob,ip,watcher,logging,incremental,explain
 
-      - name: Release build tokio
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --no-default-features --features runtime-tokio,cached,glob,ip,watcher,logging,incremental,explain
-
-      - name: Cargo Test For All Features Using async-std
+      - name: Cargo Test For tokio
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --no-default-features --features runtime-async-std,amortized,cached,glob,ip,watcher,logging,incremental,explain
+          args: --no-default-features --features runtime-tokio rt
 
-      - name: Cargo Test For All Features Using tokio
+      - name: Cargo Test For async-std
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --no-default-features --features runtime-tokio,amortized,cached,glob,ip,watcher,logging,incremental,explain
+          args: --no-default-features --features runtime-async-std
 
-      - name: Cargo Check Wasm
-        uses: actions-rs/cargo@v1
-        with:
-          command:  check
-          args: --target wasm32-unknown-unknown --no-default-features --features runtime-async-std,amortized,cached,glob,ip,watcher,logging,incremental
-
-      - name: Clippy warnings
+      - name: Cargo Clippy
         uses: actions-rs/cargo@v1
         with:
           command: clippy
