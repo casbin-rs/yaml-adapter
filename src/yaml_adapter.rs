@@ -31,7 +31,7 @@ impl<P> Adapter for YamlAdapter<P>
 where
     P: AsRef<Path> + Send + Sync,
 {
-    async fn load_policy(&self, m: &mut dyn Model) -> Result<()> {
+    async fn load_policy(&mut self, m: &mut dyn Model) -> Result<()> {
         self.load_filtered_policy_into_model(
             m,
             Filter {
