@@ -9,27 +9,29 @@ on:
       - master
 
 jobs:
-  cover:
-    name: Auto Codecov Coverage
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@master
-
-      - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-
-      - name: Run cargo-tarpaulin
-        uses: actions-rs/tarpaulin@v0.1
-        with:
-          args: --out Xml --no-default-features 
-
-      - name: Upload to codecov.io
-        uses: codecov/codecov-action@v1
-        with:
-          token: ${{secrets.CODECOV_TOKEN}}
+    cover:
+          name: Auto Codecov Coverage
+          runs-on: ubuntu-latest
+      
+          steps:
+            - name: Checkout Repository
+              uses: actions/checkout@v2
+      
+            - name: Install Rust toolchain
+              uses: actions-rs/toolchain@v1
+              with:
+                profile: minimal
+                toolchain: stable
+                override: true
+      
+            - name: Install cargo-tarpaulin
+              run: cargo install cargo-tarpaulin
+      
+            - name: Run cargo-tarpaulin
+              run: cargo tarpaulin --out Xml
+      
+            - name: Upload to codecov.io
+              uses: codecov/codecov-action@v2
+              with:
+                token: ${{secrets.CODECOV_TOKEN}}
+      
