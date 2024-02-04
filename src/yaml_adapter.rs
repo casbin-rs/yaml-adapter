@@ -31,7 +31,7 @@ impl<P> Adapter for YamlAdapter<P>
 where
     P: AsRef<Path> + Send + Sync,
 {
-    async fn load_policy(& mut self, m: &mut dyn Model) -> Result<()> {
+    async fn load_policy(&mut self, m: &mut dyn Model) -> Result<()> {
         self.load_filtered_policy_into_model(
             m,
             Filter {
@@ -56,13 +56,13 @@ where
         }
 
         let mut policies = Policies::new();
-        for sec in vec!["p", "g"] {
+        for sec in ["p", "g"] {
             if let Some(ast_map) = m.get_model().get(sec) {
                 for (ptype, ast) in ast_map {
                     let ps = ast
                         .get_policy()
                         .iter()
-                        .map(|v| v.iter().map(|s| s.clone()).collect())
+                        .map(|v| v.to_vec())
                         .collect();
                     policies.0.insert(ptype.to_string(), ps);
                 }
@@ -137,21 +137,18 @@ where
         }
         let mut yaml = self.load_yaml().await?;
         let mut temp = Vec::new();
-        match yaml.0.remove(ptype) {
-            Some(v) => {
-                for rule in v {
-                    for (i, field_value) in field_values.iter().enumerate() {
-                        if field_index + i >= rule.len() {
-                            return Ok(false);
-                        }
-                        if !field_value.is_empty() && &rule[field_index + i] != field_value {
-                            temp.push(rule.clone());
-                            break;
-                        }
+        if let Some(v) = yaml.0.remove(ptype) {
+            for rule in v {
+                for (i, field_value) in field_values.iter().enumerate() {
+                    if field_index + i >= rule.len() {
+                        return Ok(false);
+                    }
+                    if !field_value.is_empty() && &rule[field_index + i] != field_value {
+                        temp.push(rule.clone());
+                        break;
                     }
                 }
             }
-            None => {}
         }
         yaml.0.insert(ptype.to_string(), temp);
         self.save_policy_to_file(&yaml).await?;
@@ -173,7 +170,7 @@ where
                     }
                 }
                 for rule in &rules {
-                    v = v.into_iter().filter(|r| r != rule).collect();
+                    v.retain(|r| r != rule)
                 }
                 yaml.0.insert(ptype.to_string(), v);
             }
