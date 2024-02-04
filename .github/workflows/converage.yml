@@ -1,8 +1,10 @@
-name: Coverage
+name: Code Coverage
 
 on:
-  pull_request:
   push:
+    branches:
+      - master
+  pull_request:
     branches:
       - master
 
@@ -25,8 +27,7 @@ jobs:
       - name: Run cargo-tarpaulin
         uses: actions-rs/tarpaulin@v0.1
         with:
-          version: '0.22.0'
-          args: --no-default-features --features runtime-async-std,cached,glob,ip,watcher,logging,incremental,explain
+          args: --out Xml --no-default-features 
 
       - name: Upload to codecov.io
         uses: codecov/codecov-action@v1
