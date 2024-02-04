@@ -1,22 +1,307 @@
-name: ci
+name: CI
 
 on:
-  push:
-    branches: [ master ]
   pull_request:
-    branches: [ master ]
-
-env:
-  CARGO_TERM_COLOR: always
+  push:
+    branches:
+      - master
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
+    name: Auto Build CI
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macOS-latest ]
+        rust: [ stable ]
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - name: Checkout Repository
+        uses: actions/checkout@master
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+          override: true
+
+      - name: Setup PostgreSQL & MySQL & SQLite (for ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get upgrade
+          sudo apt-get install -y libpq-dev postgresql libmysqlclient-dev mysql-client libsqlite3-dev sqlite3
+          echo "host    all             all             127.0.0.1/32            md5" > sudo tee -a /etc/postgresql/10/main/pg_hba.conf
+          sudo service postgresql restart && sleep 3
+          sudo -u postgres createuser casbin_rs
+          sudo -u postgres createdb casbin
+          sudo -u postgres psql -c "alter user casbin_rs with encrypted password 'casbin_rs'; grant all privileges on database casbin to casbin_rs;"
+          sudo service postgresql restart && sleep 3
+          sudo systemctl start mysql.service
+          mysql -e "create user 'casbin_rs'@'localhost' identified by 'casbin_rs'; create database casbin; grant all on \`casbin\`.* to 'casbin_rs'@'localhost';" -uroot -proot
+
+      - name: Setup PostgreSQL & MySQL & SQLite (for macOS)
+        if: matrix.os == 'macOS-latest'
+        run: |
+          brew update
+          brew uninstall --ignore-dependencies node
+          brew install node@18
+          brew link --overwrite node@18
+          brew upgrade
+          brew services start postgresql
+          brew install mariadb@10.5 sqlite
+          # pg_ctl -D /usr/local/var/postgres start
+          sleep 3
+          createuser casbin_rs
+          createdb casbin
+          psql postgres -c "alter user casbin_rs with encrypted password 'casbin_rs'; grant all privileges on database casbin to casbin_rs;"
+          echo "/usr/local/opt/mariadb@10.5/bin" >> $GITHUB_PATH
+          /usr/local/opt/mariadb@10.5/bin/mysql_install_db
+          /usr/local/opt/mariadb@10.5/bin/mysql.server start
+          sleep 3
+          /usr/local/opt/mariadb@10.5/bin/mysql -e "create user 'casbin_rs'@'localhost' identified by 'casbin_rs'; create database casbin; grant all on \`casbin\`.* to 'casbin_rs'@'localhost';" -urunner
+          echo "MYSQLCLIENT_LIB_DIR=/usr/local/opt/mariadb@10.5/lib" >> $GITHUB_ENV
+
+      - name: Setup PostgreSQL & MySQL & SQLite (for windows)
+        if: matrix.os == 'windows-latest'
+        shell: cmd
+        run: |
+          choco install postgresql11 --force --params '/Password:root'
+          choco install mysql sqlite
+          "C:\Program Files\PostgreSQL\11\bin\createuser" casbin_rs
+          "C:\Program Files\PostgreSQL\11\bin\createdb" casbin
+          "C:\Program Files\PostgreSQL\11\bin\psql" -c "alter user casbin_rs with encrypted password 'casbin_rs'; grant all privileges on database casbin to casbin_rs;"
+          "C:\tools\mysql\current\bin\mysql" -e "create user 'casbin_rs'@'localhost' identified by 'casbin_rs'; create database casbin; grant all on `casbin`.* to 'casbin_rs'@'localhost';" -uroot
+          cd /D C:\ProgramData\chocolatey\lib\SQLite\tools
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          lib /machine:x64 /def:sqlite3.def /out:sqlite3.lib
+
+      - name: Set environment variables (for windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          echo "C:\Program Files\PostgreSQL\11\bin" >> $GITHUB_PATH
+          echo "PQ_LIB_DIR=C:\Program Files\PostgreSQL\11\lib" >> $GITHUB_ENV
+          echo "MYSQLCLIENT_LIB_DIR=C:\tools\mysql\current\lib" >> $GITHUB_ENV
+          echo "SQLITE3_LIB_DIR=C:\ProgramData\chocolatey\lib\SQLite\tools" >> $GITHUB_ENV
+
+      - name: Create SQLite DB
+        run: |
+          touch casbin.db
+
+      - name: Create PostgresSQL Table
+        run: psql -c "CREATE TABLE IF NOT EXISTS casbin_rule (
+          id SERIAL PRIMARY KEY,
+          ptype VARCHAR NOT NULL,
+          v0 VARCHAR NOT NULL,
+          v1 VARCHAR NOT NULL,
+          v2 VARCHAR NOT NULL,
+          v3 VARCHAR NOT NULL,
+          v4 VARCHAR NOT NULL,
+          v5 VARCHAR NOT NULL,
+          CONSTRAINT unique_key_sqlx_adapter UNIQUE(ptype, v0, v1, v2, v3, v4, v5)
+          );" postgres://casbin_rs:casbin_rs@127.0.0.1:5432/casbin
+
+      - name: Create MySQL Table
+        run: |
+          mysql -ucasbin_rs -pcasbin_rs -e "USE casbin; CREATE TABLE IF NOT EXISTS casbin_rule (
+            id INT NOT NULL AUTO_INCREMENT,
+            ptype VARCHAR(12) NOT NULL,
+            v0 VARCHAR(128) NOT NULL,
+            v1 VARCHAR(128) NOT NULL,
+            v2 VARCHAR(128) NOT NULL,
+            v3 VARCHAR(128) NOT NULL,
+            v4 VARCHAR(128) NOT NULL,
+            v5 VARCHAR(128) NOT NULL,
+            PRIMARY KEY(id),
+            CONSTRAINT unique_key_sqlx_adapter UNIQUE(ptype, v0, v1, v2, v3, v4, v5)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8;"
+
+      - name: Create SQLite Table
+        run: |
+          sqlite3 casbin.db -cmd "CREATE TABLE IF NOT EXISTS casbin_rule (
+            id INTEGER PRIMARY KEY,
+            ptype VARCHAR(12) NOT NULL,
+            v0 VARCHAR(128) NOT NULL,
+            v1 VARCHAR(128) NOT NULL,
+            v2 VARCHAR(128) NOT NULL,
+            v3 VARCHAR(128) NOT NULL,
+            v4 VARCHAR(128) NOT NULL,
+            v5 VARCHAR(128) NOT NULL,
+            CONSTRAINT unique_key_diesel_adapter UNIQUE(ptype, v0, v1, v2, v3, v4, v5)
+            );"
+
+      - name: Cargo Build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+
+      # PostgreSQL tests
+      # async-std
+      - name: Cargo Test For PostgreSQL,runtime-async-std-native-tls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: postgres://casbin_rs:casbin_rs@localhost:5432/casbin
+        with:
+          command: test
+          args: --no-default-features --features postgres,runtime-async-std-native-tls
+
+      - name: Cargo Test For PostgreSQL,runtime-async-std-rustls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: postgres://casbin_rs:casbin_rs@localhost:5432/casbin
+        with:
+          command: test
+          args: --no-default-features --features postgres,runtime-async-std-rustls
+
+      # tokio
+      - name: Cargo Test For PostgreSQL,runtime-tokio-native-tls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: postgres://casbin_rs:casbin_rs@localhost:5432/casbin
+        with:
+          command: test
+          args: --no-default-features --features postgres,runtime-tokio-native-tls
+
+      - name: Cargo Test For PostgreSQL,runtime-tokio-rustls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: postgres://casbin_rs:casbin_rs@localhost:5432/casbin
+        with:
+          command: test
+          args: --no-default-features --features postgres,runtime-tokio-rustls
+
+      # actix
+      - name: Cargo Test For PostgreSQL,runtime-actix-native-tls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: postgres://casbin_rs:casbin_rs@localhost:5432/casbin
+        with:
+          command: test
+          args: --no-default-features --features postgres,runtime-actix-native-tls
+
+      - name: Cargo Test For PostgreSQL,runtime-actix-rustls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: postgres://casbin_rs:casbin_rs@localhost:5432/casbin
+        with:
+          command: test
+          args: --no-default-features --features postgres,runtime-actix-rustls
+
+      # MySQL
+      # async-std
+      - name: Cargo Test For MySQL,runtime-async-std-native-tls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: mysql://casbin_rs:casbin_rs@localhost:3306/casbin
+        with:
+          command: test
+          args: --no-default-features --features mysql,runtime-async-std-native-tls
+
+      - name: Cargo Test For MySQL,runtime-async-std-rustls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: mysql://casbin_rs:casbin_rs@localhost:3306/casbin
+        with:
+          command: test
+          args: --no-default-features --features mysql,runtime-async-std-rustls
+
+      # tokio
+      - name: Cargo Test For MySQL,runtime-tokio-native-tls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: mysql://casbin_rs:casbin_rs@localhost:3306/casbin
+        with:
+          command: test
+          args: --no-default-features --features mysql,runtime-tokio-native-tls
+
+      - name: Cargo Test For MySQL,runtime-tokio-rustls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: mysql://casbin_rs:casbin_rs@localhost:3306/casbin
+        with:
+          command: test
+          args: --no-default-features --features mysql,runtime-tokio-rustls
+
+      # actix
+      - name: Cargo Test For MySQL,runtime-actix-native-tls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: mysql://casbin_rs:casbin_rs@localhost:3306/casbin
+        with:
+          command: test
+          args: --no-default-features --features mysql,runtime-actix-native-tls
+
+      - name: Cargo Test For MySQL,runtime-actix-rustls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: mysql://casbin_rs:casbin_rs@localhost:3306/casbin
+        with:
+          command: test
+          args: --no-default-features --features mysql,runtime-actix-rustls
+
+      #SQLite
+      #async-std
+      - name: Cargo Test For SQLite,runtime-async-std-native-tls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: sqlite:casbin.db
+        with:
+          command: test
+          args: --no-default-features --features sqlite,runtime-async-std-native-tls
+
+      - name: Cargo Test For SQLite,runtime-async-std-rustls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: sqlite:casbin.db
+        with:
+          command: test
+          args: --no-default-features --features sqlite,runtime-async-std-rustls
+
+      # tokio
+      - name: Cargo Test For SQLite,runtime-tokio-native-tls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: sqlite:casbin.db
+        with:
+          command: test
+          args: --no-default-features --features sqlite,runtime-tokio-native-tls
+
+      - name: Cargo Test For SQLite,runtime-tokio-rustls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: sqlite:casbin.db
+        with:
+          command: test
+          args: --no-default-features --features sqlite,runtime-tokio-rustls
+
+      # actix
+      - name: Cargo Test For SQLite,runtime-actix-native-tls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: sqlite:casbin.db
+        with:
+          command: test
+          args: --no-default-features --features sqlite,runtime-actix-native-tls
+
+      - name: Cargo Test For SQLite,runtime-actix-rustls
+        uses: actions-rs/cargo@v1
+        env:
+          DATABASE_URL: sqlite:casbin.db
+        with:
+          command: test
+          args: --no-default-features --features sqlite,runtime-actix-rustls
+
+      - name: Cargo Clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: -- -D warnings
+
+      - name: Cargo Fmt Check
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
